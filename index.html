@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src https://api.github.com; img-src data:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#12131d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="NAIメモ">
+<title>NAIメモ</title>
+<!--
+  NovelAI メモ ビューア（novelai-memo-viewer）
+  ・PCの拡張機能（Prompt Tools for NovelAI）の「📱 送る」で送ったメモとバックアップを、スマホ・iPadで見てコピーするページ
+  ・このファイルにはデータもユーザー名も入っていない。開いたときに、端末に保存したキーで GitHub の非公開リポジトリから sync.json を読む
+  ・通信先は api.github.com だけ（上の Content-Security-Policy で、それ以外への通信をブラウザが止める）
+  ・読んだプロンプトは画面に表示するだけで、端末には保存しない（保存するのは、ユーザー名・リポジトリ名・読み取り用のキーだけ）
+-->
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #12131d; color: #e8e8f0; font: 15px/1.5 system-ui, -apple-system, "Hiragino Sans", "Yu Gothic UI", sans-serif; -webkit-text-size-adjust: 100%; }
+  header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; padding: calc(10px + env(safe-area-inset-top)) 12px 10px; background: #1c1d2aee; border-bottom: 1px solid #3a3c52; backdrop-filter: blur(6px); }
+  header h1 { font-size: 16px; margin: 0; margin-right: auto; }
+  main { max-width: 760px; margin: 0 auto; padding: 12px 12px calc(40px + env(safe-area-inset-bottom)); }
+  button, select, input { font: inherit; color: inherit; }
+  button { cursor: pointer; border: none; border-radius: 8px; padding: 8px 12px; background: #3a3c52; }
+  button:active { background: #4a4d6a; }
+  button.primary { background: #f5c06f; color: #12131d; font-weight: 700; }
+  button.copied { background: #7fd49a; color: #12131d; }
+  select, input { width: 100%; background: #1c1d2a; border: 1px solid #3a3c52; border-radius: 8px; padding: 9px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .tabs button { flex: 1; }
+  .tabs button.on { background: #f5c06f; color: #12131d; font-weight: 700; }
+  .info { color: #8f91ab; font-size: 13px; margin: 8px 0 12px; }
+  .card { background: #1c1d2a; border: 1px solid #3a3c52; border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+  .card h2 { font-size: 13px; color: #b8bad0; margin: 0 0 6px; display: flex; align-items: center; gap: 8px; }
+  .card h2 span { margin-right: auto; }
+  .sec { border-top: 1px solid #2c2e42; padding-top: 8px; margin-top: 8px; }
+  .sec:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+  .sechead { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-weight: 600; font-size: 13px; color: #ffd08a; }
+  .sechead span { margin-right: auto; }
+  pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 13px/1.55 ui-monospace, Menlo, Consolas, monospace; background: #12131d; border-radius: 6px; padding: 8px; max-height: 40vh; overflow: auto; -webkit-user-select: text; user-select: text; }
+  pre.short { max-height: 7.5em; }
+  .copy { min-width: 76px; padding: 8px 14px; }
+  .empty { color: #8f91ab; text-align: center; padding: 30px 0; }
+  .err { color: #f2a0a0; margin: 10px 0; }
+  form label { display: block; font-weight: 600; margin: 14px 0 4px; }
+  .hint { color: #8f91ab; font-size: 12px; font-weight: 400; }
+  .row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+  .note { color: #8f91ab; font-size: 12px; margin-top: 18px; }
+  .more { width: 100%; margin-top: 4px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📱 NAIメモ</h1>
+  <button id="reload" aria-label="読み込み直す">🔄</button>
+  <button id="openSet" aria-label="設定">⚙</button>
+</header>
+<main>
+  <section id="viewer" hidden>
+    <div class="tabs">
+      <button id="tabMemo" class="on">メモ</button>
+      <button id="tabBk">バックアップ</button>
+    </div>
+    <select id="model" aria-label="モデル"></select>
+    <div class="info" id="info"></div>
+    <div id="list"></div>
+  </section>
+
+  <section id="setup" hidden>
+    <form id="form" autocomplete="off">
+      <label for="owner">GitHubのユーザー名</label>
+      <input id="owner" spellcheck="false" autocapitalize="off" autocorrect="off">
+      <label for="repo">リポジトリ名 <span class="hint">（メモを送っている非公開のもの）</span></label>
+      <input id="repo" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="novelai-memo-sync">
+      <label for="token">読み取り用のキー <span class="hint">（github_pat_ で始まるもの。保存後は表示しません）</span></label>
+      <input id="token" type="password" spellcheck="false" autocapitalize="off" autocorrect="off">
+      <div class="row">
+        <button class="primary" type="submit">保存して読み込む</button>
+        <button type="button" id="cancel">戻る</button>
+        <button type="button" id="forget">この端末からキーを消す</button>
+      </div>
+      <div class="err" id="setErr"></div>
+    </form>
+    <p class="note">
+      ・ユーザー名・リポジトリ名・キーは、この端末のこのブラウザにだけ保存されます。<br>
+      ・キーは「読み取りだけ」で作ったものを使ってください。端末をなくしたら、GitHubの設定でそのキーを削除すれば読めなくなります。<br>
+      ・読み込んだプロンプトは表示するだけで、端末には保存しません。
+    </p>
+  </section>
+</main>
+<script>
+"use strict";
+(() => {
+  const CFG = "nmv_cfg";
+  const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+  const REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
+  const HEAD_RE = /^[ \t]*【(メイン|キャラ(\d+))】[ \t]*$/;
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text; // データは必ず textContent で入れる（HTMLとして解釈しない）
+    return e;
+  };
+
+  let data = null;
+  let tab = "memo";
+  let bkShown = 15;
+
+  const loadCfg = () => {
+    try {
+      const c = JSON.parse(localStorage.getItem(CFG) || "null");
+      return c && typeof c === "object" ? c : null;
+    } catch (e) {
+      return null;
+    }
+  };
+  const saveCfg = (c) => {
+    try {
+      localStorage.setItem(CFG, JSON.stringify(c));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+  const cfgOk = (c) => !!(c && OWNER_RE.test(c.owner || "") && REPO_RE.test(c.repo || "") && c.repo !== "." && c.repo !== ".." && typeof c.token === "string" && c.token.length >= 20);
+
+  // ---- 表示の切り替え ----
+  function showSetup(err) {
+    const c = loadCfg() || {};
+    $("viewer").hidden = true;
+    $("setup").hidden = false;
+    $("owner").value = c.owner || "";
+    $("repo").value = c.repo || "";
+    $("token").value = "";
+    $("token").placeholder = c.token ? "保存済み（変えるときだけ入れてください）" : "";
+    $("cancel").hidden = !data;
+    $("setErr").textContent = err || "";
+  }
+  function showViewer() {
+    $("setup").hidden = true;
+    $("viewer").hidden = false;
+    render();
+  }
+
+  // ---- 読み込み ----
+  async function load() {
+    const c = loadCfg();
+    if (!cfgOk(c)) return showSetup();
+    $("info").textContent = "読み込んでいます…";
+    $("viewer").hidden = false;
+    $("setup").hidden = true;
+    let res;
+    try {
+      res = await fetch(`https://api.github.com/repos/${c.owner}/${c.repo}/contents/sync.json`, {
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        headers: { Accept: "application/vnd.github.raw+json", Authorization: `Bearer ${c.token}`, "X-GitHub-Api-Version": "2022-11-28" },
+      });
+    } catch (e) {
+      $("info").textContent = "";
+      return fail("通信できませんでした。電波の状態を確かめて、🔄で読み込み直してね");
+    }
+    if (res.status === 401) return showSetup("キーが正しくないか、期限が切れています。入れ直してね");
+    if (res.status === 403) return showSetup("キーにこのリポジトリを読む権限がありません（Contents を Read-only にしたキーか確認してね）");
+    if (res.status === 404) {
+      if (!data) return showSetup("見つかりませんでした。ユーザー名・リポジトリ名が合っているか、キーでそのリポジトリを選んだか確認してね。まだPCから一度も送っていない場合も、こうなります");
+      return fail("見つかりませんでした（404）");
+    }
+    if (!res.ok) return fail(`GitHubからエラーが返りました（${res.status}）`);
+    try {
+      const d = JSON.parse(await res.text());
+      if (!d || d.app !== "novelai-prompt-tools" || typeof d.memos !== "object" || !Array.isArray(d.backups)) throw new Error();
+      data = d;
+    } catch (e) {
+      return fail("データの形が違います（PCの拡張機能から送ったものか確認してね）");
+    }
+    showViewer();
+  }
+  function fail(m) {
+    $("list").replaceChildren(el("div", "err", m));
+  }
+
+  // ---- 【メイン】【キャラ1】ごとに分ける（見出しがなければ全体を1つ） ----
+  function sections(text) {
+    const lines = String(text).split(/\r?\n/);
+    if (!lines.some((l) => HEAD_RE.test(l))) return [{ name: null, text: String(text).trim() }];
+    const out = [];
+    let cur = { name: "（見出しの前）", body: [] };
+    for (const l of lines) {
+      const m = l.match(HEAD_RE);
+      if (m) {
+        out.push(cur);
+        cur = { name: m[1], body: [] };
+      } else cur.body.push(l);
+    }
+    out.push(cur);
+    return out.map((s) => ({ name: s.name, text: s.body.join("\n").trim() })).filter((s) => s.text);
+  }
+
+  // ---- コピー ----
+  async function copy(text, btn) {
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch (e) {
+      const t = el("textarea");
+      t.value = text;
+      t.setAttribute("readonly", "");
+      t.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+      document.body.appendChild(t);
+      t.select();
+      t.setSelectionRange(0, text.length);
+      try {
+        ok = document.execCommand("copy");
+      } catch (e2) {}
+      t.remove();
+    }
+    const old = btn.textContent;
+    btn.textContent = ok ? "✓ コピー" : "失敗";
+    btn.classList.toggle("copied", ok);
+    setTimeout(() => {
+      btn.textContent = old;
+      btn.classList.remove("copied");
+    }, 1200);
+  }
+  const copyBtn = (text, label) => {
+    const b = el("button", "copy", label || "コピー");
+    b.type = "button";
+    b.addEventListener("click", () => copy(text, b));
+    return b;
+  };
+
+  // ---- 描画 ----
+  const label = (k) => (data.labels && data.labels[k]) || k;
+  function fillModels() {
+    const sel = $("model");
+    const prev = sel.value;
+    const keys = new Set(tab === "memo" ? Object.keys(data.memos) : data.backups.map((b) => b.model));
+    const opts = [...keys].sort((a, b) => label(a).localeCompare(label(b), "ja", { numeric: true }));
+    sel.replaceChildren();
+    if (tab === "bk") sel.appendChild(new Option("全モデル", "*"));
+    for (const k of opts) sel.appendChild(new Option(label(k), k));
+    const want = prev || localStorage.getItem("nmv_model") || "";
+    if ([...sel.options].some((o) => o.value === want)) sel.value = want;
+    sel.hidden = !sel.options.length;
+  }
+  function memoCard(title, text, short) {
+    const card = el("div", "card");
+    const secs = sections(text);
+    const h = el("h2");
+    h.appendChild(el("span", "", title));
+    if (secs.length > 1) h.appendChild(copyBtn(text, "全体"));
+    else h.appendChild(copyBtn(secs[0] ? secs[0].text : text));
+    card.appendChild(h);
+    for (const s of secs) {
+      const box = el("div", "sec");
+      if (secs.length > 1) {
+        const sh = el("div", "sechead");
+        sh.appendChild(el("span", "", `【${s.name}】`));
+        sh.appendChild(copyBtn(s.text));
+        box.appendChild(sh);
+      }
+      box.appendChild(el("pre", short ? "short" : "", s.text));
+      card.appendChild(box);
+    }
+    return card;
+  }
+  function render() {
+    if (!data) return;
+    $("tabMemo").classList.toggle("on", tab === "memo");
+    $("tabBk").classList.toggle("on", tab === "bk");
+    fillModels();
+    const k = $("model").value;
+    const sent = new Date(data.sentAt);
+    $("info").textContent = `PCから送った日時: ${isNaN(sent) ? "不明" : sent.toLocaleString("ja-JP")}`;
+    const list = $("list");
+    list.replaceChildren();
+    if (tab === "memo") {
+      const t = data.memos[k];
+      if (!t) return list.appendChild(el("div", "empty", "メモがありません"));
+      list.appendChild(memoCard(label(k), t, false));
+    } else {
+      const items = data.backups.filter((b) => b && typeof b.text === "string" && (k === "*" || b.model === k));
+      if (!items.length) return list.appendChild(el("div", "empty", "バックアップがありません"));
+      for (const b of items.slice(0, bkShown)) {
+        const d = new Date(b.ts);
+        const title = `${isNaN(d) ? "" : d.toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}　${label(b.model)}`;
+        list.appendChild(memoCard(title, b.text, true));
+      }
+      if (items.length > bkShown) {
+        const more = el("button", "more", `もっと見る（残り ${items.length - bkShown}件）`);
+        more.addEventListener("click", () => {
+          bkShown += 15;
+          render();
+        });
+        list.appendChild(more);
+      }
+    }
+  }
+
+  // ---- 操作 ----
+  $("tabMemo").addEventListener("click", () => {
+    tab = "memo";
+    render();
+  });
+  $("tabBk").addEventListener("click", () => {
+    tab = "bk";
+    bkShown = 15;
+    render();
+  });
+  $("model").addEventListener("change", () => {
+    try {
+      localStorage.setItem("nmv_model", $("model").value);
+    } catch (e) {}
+    bkShown = 15;
+    render();
+  });
+  $("reload").addEventListener("click", load);
+  $("openSet").addEventListener("click", () => showSetup());
+  $("cancel").addEventListener("click", showViewer);
+  $("forget").addEventListener("click", () => {
+    const c = loadCfg() || {};
+    saveCfg({ owner: c.owner || "", repo: c.repo || "", token: "" });
+    data = null;
+    showSetup("この端末からキーを消しました");
+  });
+  $("form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const old = loadCfg() || {};
+    const owner = $("owner").value.trim();
+    const repo = $("repo").value.trim();
+    const tok = $("token").value.trim();
+    if (!OWNER_RE.test(owner)) return ($("setErr").textContent = "ユーザー名の形が正しくありません");
+    if (!REPO_RE.test(repo) || repo === "." || repo === "..") return ($("setErr").textContent = "リポジトリ名の形が正しくありません");
+    if (tok && !/^(github_pat_|ghp_)[A-Za-z0-9_]{20,}$/.test(tok)) return ($("setErr").textContent = "キーの形が正しくありません（github_pat_ で始まる文字列をそのまま貼ってね）");
+    const token = tok || old.token || "";
+    if (!token) return ($("setErr").textContent = "キーを入れてね");
+    if (!saveCfg({ owner, repo, token })) return ($("setErr").textContent = "この端末に保存できませんでした（プライベートブラウズでは保存できないことがあります）");
+    load();
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>
