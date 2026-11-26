@@ -17,6 +17,7 @@
   ・このファイルにはデータもユーザー名も入っていない。開いたときに、端末に保存したキーで GitHub の非公開リポジトリから sync.json を読む
   ・通信先は api.github.com だけ（上の Content-Security-Policy で、それ以外への通信をブラウザが止める）
   ・読んだプロンプトは画面に表示するだけで、端末には保存しない（保存するのは、ユーザー名・リポジトリ名・読み取り用のキーだけ）
+  ・PC専用の書き方（{a|b}・(語:1.2)・範囲の重み）は、コピーするときにNovelAIの書き方に変える（v1.2.0）
 -->
 <style>
   :root { color-scheme: dark; }
@@ -37,14 +38,18 @@
   .info { color: #8f91ab; font-size: 13px; margin: 8px 0 12px; }
   .card { background: #1c1d2a; border: 1px solid #3a3c52; border-radius: 10px; padding: 10px; margin-bottom: 10px; }
   .card h2 { font-size: 13px; color: #b8bad0; margin: 0 0 6px; display: flex; align-items: center; gap: 8px; }
-  .card h2 span { margin-right: auto; }
+  .card h2 > span:first-child { margin-right: auto; }
   .sec { border-top: 1px solid #2c2e42; padding-top: 8px; margin-top: 8px; }
   .sec:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
   .sechead { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-weight: 600; font-size: 13px; color: #ffd08a; }
-  .sechead span { margin-right: auto; }
+  .sechead > span:first-child { margin-right: auto; }
   pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 13px/1.55 ui-monospace, Menlo, Consolas, monospace; background: #12131d; border-radius: 6px; padding: 8px; max-height: 40vh; overflow: auto; -webkit-user-select: text; user-select: text; }
   pre.short { max-height: 7.5em; }
-  .copy { min-width: 76px; padding: 8px 14px; }
+  .copy { min-width: 64px; padding: 8px 12px; }
+  .btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .pv { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #4a4d6a; }
+  .pvhead { font-size: 12px; color: #7fd49a; margin-bottom: 4px; }
+  pre.pvtext { max-height: 30vh; border: 1px solid #2f5a3c; }
   .empty { color: #8f91ab; text-align: center; padding: 30px 0; }
   .err { color: #f2a0a0; margin: 10px 0; }
   form label { display: block; font-weight: 600; margin: 14px 0 4px; }
@@ -205,6 +210,291 @@
     return out.map((s) => ({ name: s.name, text: s.body.join("\n").trim() })).filter((s) => s.text);
   }
 
+  // ==== PC専用の書き方を、NovelAIの書き方にする（v1.2.0） ====
+  // PCでは拡張機能が送る直前に書き換えているが、スマホ・iPadでは拡張機能がないので、コピーするときにここで書き換える
+  //   ・(語:1.6) → 1.6::語::            （拡張機能の sdconv.js と同じ処理）
+  //   ・1.0-1.5::語:: → 1.25::語:: など   （範囲の重みは、コピーのたびに抽選）
+  //   ・{a|b}（入れ子・確率 3:: つき）
+  //       🎲 コピー  : コピーのたびに抽選して、決まった1つを入れる（拡張機能の inject-main.js と同じ処理）
+  //       || コピー  : NovelAIの ||a|b|| に変える。生成のたびにNovelAIが抽選する
+  //                    ・NovelAIの || は入れ子と確率に対応していないので、入れ子は全部の組み合わせに広げ、
+  //                      確率は同じ選択肢をくり返して近づける（例: {x|3::} → ||x|,|,|,||）
+  //                    ・空の選択肢は「,」にする（NovelAIの説明書の書き方）
+  //                    ・組み合わせが多すぎる・|| の中に {a|b} がある、などで変えられない部分は、🎲と同じく抽選して入れる
+  const rand = (n) => {
+    const a = new Uint32Array(1);
+    crypto.getRandomValues(a);
+    return a[0] % n;
+  };
+  const rnd01 = () => rand(0x40000000) / 0x40000000;
+  const skipRandomizer = (s, i) => {
+    if (s[i] !== "|" || s[i + 1] !== "|") return -1;
+    const end = s.indexOf("||", i + 2);
+    return end < 0 ? -1 : end + 2;
+  };
+  function matchBrace(s, start) {
+    let depth = 0;
+    for (let j = start; j < s.length; j++) {
+      if (s[j] === "{") depth++;
+      else if (s[j] === "}" && --depth === 0) return j;
+    }
+    return -1;
+  }
+  function splitTop(inner) {
+    const parts = [];
+    let depth = 0;
+    let cur = "";
+    for (let i = 0; i < inner.length; i++) {
+      const skip = skipRandomizer(inner, i);
+      if (skip > 0) {
+        cur += inner.slice(i, skip);
+        i = skip - 1;
+        continue;
+      }
+      const c = inner[i];
+      if (c === "{") depth++;
+      else if (c === "}") depth--;
+      if (c === "|" && depth === 0) {
+        parts.push(cur);
+        cur = "";
+      } else cur += c;
+    }
+    parts.push(cur);
+    return parts;
+  }
+  const NUMP = String.raw`(?:\d+\.?\d*|\.\d+)`;
+  const NUMS = String.raw`-?(?:\d+\.?\d*|\.\d+)`;
+  const LEAD_WEIGHT = new RegExp(`^\\s*(${NUMP})::`);
+  function parseOption(part) {
+    const m = LEAD_WEIGHT.exec(part);
+    if (m) {
+      const rest = part.slice(m[0].length);
+      if ((rest.match(/::/g) || []).length % 2 === 0) return { w: parseFloat(m[1]), text: rest };
+    }
+    return { w: 1, text: part };
+  }
+  function pickWeighted(parts) {
+    const opts = parts.map(parseOption);
+    let total = 0;
+    for (const o of opts) total += Math.max(0, o.w);
+    if (total <= 0) return opts[rand(opts.length)].text;
+    let r = rnd01() * total;
+    for (const o of opts) {
+      const w = Math.max(0, o.w);
+      if (r < w) return o.text;
+      r -= w;
+    }
+    return opts[opts.length - 1].text;
+  }
+  function expand(s) {
+    let out = "";
+    for (let i = 0; i < s.length; i++) {
+      const skip = skipRandomizer(s, i);
+      if (skip > 0) {
+        out += s.slice(i, skip);
+        i = skip - 1;
+        continue;
+      }
+      if (s[i] !== "{") {
+        out += s[i];
+        continue;
+      }
+      const close = matchBrace(s, i);
+      if (close < 0) {
+        out += s[i];
+        continue;
+      }
+      const inner = s.slice(i + 1, close);
+      const parts = splitTop(inner);
+      out += parts.length > 1 ? expand(pickWeighted(parts)) : "{" + expand(inner) + "}";
+      i = close;
+    }
+    return out;
+  }
+
+  // ---- {a|b} → ||a|b|| ----
+  const MAX_COMBO = 40;
+  // 文字列を、出てくる可能性のある文字列と、その確率の一覧にする（入れ子も全部広げる）
+  function flatten(s) {
+    let res = [{ t: "", p: 1 }];
+    const add = (sub) => {
+      const m = new Map();
+      for (const a of res) for (const b of sub) m.set(a.t + b.t, (m.get(a.t + b.t) || 0) + a.p * b.p);
+      if (m.size > MAX_COMBO) throw new Error("too many");
+      res = [...m].map(([t, p]) => ({ t, p }));
+    };
+    let lit = "";
+    const flush = () => {
+      if (lit) add([{ t: lit, p: 1 }]);
+      lit = "";
+    };
+    for (let i = 0; i < s.length; i++) {
+      if (skipRandomizer(s, i) > 0) throw new Error("nested ||"); // || の中には入れられない
+      if (s[i] !== "{") {
+        lit += s[i];
+        continue;
+      }
+      const close = matchBrace(s, i);
+      if (close < 0) {
+        lit += s[i];
+        continue;
+      }
+      flush();
+      const inner = s.slice(i + 1, close);
+      const parts = splitTop(inner);
+      if (parts.length > 1) {
+        const opts = parts.map(parseOption);
+        let total = opts.reduce((n, o) => n + Math.max(0, o.w), 0);
+        const ws = total > 0 ? opts.map((o) => Math.max(0, o.w) / total) : opts.map(() => 1 / opts.length);
+        const sub = [];
+        opts.forEach((o, k) => {
+          if (ws[k] > 0) for (const f of flatten(o.text)) sub.push({ t: f.t, p: f.p * ws[k] });
+        });
+        add(sub);
+      } else add(flatten(inner).map((f) => ({ t: "{" + f.t + "}", p: f.p })));
+      i = close;
+    }
+    flush();
+    return res;
+  }
+  // 確率を、くり返す回数（整数）にする。ずれが大きすぎるときは null
+  function toCounts(list) {
+    for (let n = list.length; n <= MAX_COMBO; n++) {
+      const c = list.map((o) => Math.round(o.p * n));
+      if (c.some((x) => x < 1)) continue;
+      const tot = c.reduce((a, b) => a + b, 0);
+      if (tot > MAX_COMBO) continue;
+      if (Math.max(...list.map((o, k) => Math.abs(c[k] / tot - o.p))) < 0.02) return c;
+    }
+    return null;
+  }
+  function toNative(s) {
+    let out = "";
+    for (let i = 0; i < s.length; i++) {
+      const skip = skipRandomizer(s, i);
+      if (skip > 0) {
+        out += s.slice(i, skip);
+        i = skip - 1;
+        continue;
+      }
+      if (s[i] !== "{") {
+        out += s[i];
+        continue;
+      }
+      const close = matchBrace(s, i);
+      if (close < 0) {
+        out += s[i];
+        continue;
+      }
+      const group = s.slice(i, close + 1);
+      const inner = s.slice(i + 1, close);
+      if (splitTop(inner).length < 2) {
+        out += "{" + toNative(inner) + "}"; // | が無い {} は標準の強調
+      } else {
+        let done = false;
+        try {
+          const list = flatten(group);
+          if (list.length === 1) {
+            out += list[0].t;
+            done = true;
+          } else {
+            const c = toCounts(list);
+            if (c && !list.some((o) => o.t.includes("|"))) {
+              const opts = [];
+              list.forEach((o, k) => {
+                for (let r = 0; r < c[k]; r++) opts.push(o.t.trim() ? o.t : ",");
+              });
+              out += "||" + opts.join("|") + "||";
+              done = true;
+            }
+          }
+        } catch (e) {}
+        if (!done) out += expand(group); // 変えられないときは、ここで抽選する
+      }
+      i = close;
+    }
+    return out;
+  }
+
+  // ---- (語:1.2) → 1.2::語:: （拡張機能の sdconv.js と同じ） ----
+  const RANGE = `${NUMS}(?:-${NUMS}(?:-${NUMP})?)?`;
+  const SD_RE = new RegExp(`^([\\s\\S]+?)\\s*:\\s*(${RANGE})\\s*$`);
+  const fixDots = (w) => w.replace(/(^|[^\d])\./g, "$10.");
+  const wfmt = (w) => (/^-?\d+$/.test(w) ? w + ".00" : w);
+  function convertSD(s) {
+    let out = s;
+    if (s.includes("(") && s.includes(":")) {
+      const escaped = (i) => {
+        let n = 0;
+        for (let k = i - 1; k >= 0 && s[k] === "\\"; k--) n++;
+        return n % 2 === 1;
+      };
+      const stack = [];
+      const cands = [];
+      for (let i = 0; i < s.length; i++) {
+        const c = s[i];
+        if (c === "(" && !escaped(i)) stack.push(i);
+        else if (c === ")" && !escaped(i) && stack.length) {
+          const open = stack.pop();
+          const m = SD_RE.exec(s.slice(open + 1, i));
+          if (m && /[^\d\s.:,-]/.test(m[1])) cands.push({ open, close: i, text: m[1].trim(), w: fixDots(m[2]) });
+        }
+      }
+      const leaves = cands.filter((c) => !cands.some((d) => d !== c && ((d.open > c.open && d.close < c.close) || (c.open > d.open && c.close < d.close))));
+      leaves.sort((a, b) => b.open - a.open);
+      for (const c of leaves) out = out.slice(0, c.open) + `${wfmt(c.w)}::${c.text}::` + out.slice(c.close + 1);
+    }
+    return out;
+  }
+
+  // ---- 1.0-1.5::語:: の範囲を、ランダムな1つの数字にする（拡張機能と同じ） ----
+  const BACK = new RegExp(`(?<![\\w.])(${NUMS})(?:-(${NUMS})(?:-(${NUMP}))?)?$`);
+  function pickRange(lo, hi, step) {
+    lo = parseFloat(lo);
+    hi = parseFloat(hi);
+    if (lo > hi) [lo, hi] = [hi, lo];
+    const st = step && parseFloat(step) > 0 ? parseFloat(step) : 0.05;
+    const n = Math.floor((hi - lo) / st + 1e-9);
+    const v = Math.round((lo + rand(n + 1) * st) * 100) / 100;
+    return Number.isInteger(v) ? v.toFixed(2) : String(v);
+  }
+  function expandRanges(s) {
+    if (!s.includes("::")) return s;
+    const reps = [];
+    let open = null;
+    const re = /::/g;
+    let m;
+    while ((m = re.exec(s))) {
+      const pos = m.index;
+      if (!open) {
+        const nm = BACK.exec(s.slice(Math.max(0, pos - 40), pos));
+        if (nm) open = { start: pos - nm[0].length, end: pos, range: nm[2] !== undefined, lo: nm[1], hi: nm[2], step: nm[3] };
+      } else {
+        if (open.range) reps.push({ start: open.start, end: open.end, val: pickRange(open.lo, open.hi, open.step) });
+        open = null;
+      }
+    }
+    for (let i = reps.length - 1; i >= 0; i--) s = s.slice(0, reps[i].start) + reps[i].val + s.slice(reps[i].end);
+    return s;
+  }
+
+  const hasDyn = (s) => {
+    for (let i = 0; i < s.length; i++) {
+      const skip = skipRandomizer(s, i);
+      if (skip > 0) {
+        i = skip - 1;
+        continue;
+      }
+      if (s[i] === "{") {
+        const close = matchBrace(s, i);
+        if (close > 0 && splitTop(s.slice(i + 1, close)).length > 1) return true;
+      }
+    }
+    return false;
+  };
+  const forRoll = (s) => expandRanges(convertSD(expand(s)));
+  const forNative = (s) => expandRanges(convertSD(toNative(s)));
+
   // ---- コピー ----
   // iPad・iPhoneのSafariは、ボタンを押した「その瞬間」にしかコピーを許さない。
   // そのため、まず同期的に（待たずに）コピーし、だめなときだけクリップボードAPIを試す（v1.1.0）
@@ -240,7 +530,12 @@
       sel.addRange(r);
     } catch (e) {}
   }
-  async function copy(text, btn, pre) {
+  // text: コピーする内容（変換済み）、pv: カードの「コピーした内容」の欄
+  async function copy(text, btn, pv) {
+    if (pv) {
+      pv.box.hidden = false;
+      pv.pre.textContent = text;
+    }
     let ok = execCopy(text);
     if (!ok && navigator.clipboard && window.isSecureContext) {
       try {
@@ -250,20 +545,30 @@
     }
     const old = btn.dataset.label || btn.textContent;
     btn.dataset.label = old;
-    btn.textContent = ok ? "✓ コピー" : "長押しで";
+    btn.textContent = ok ? "✓" : "長押しで";
     btn.classList.toggle("copied", ok);
-    if (!ok) selectForManual(pre);
+    if (!ok && pv) selectForManual(pv.pre);
     setTimeout(() => {
       btn.textContent = old;
       btn.classList.remove("copied");
     }, ok ? 1200 : 2500);
   }
-  const copyBtn = (text, label, preOf) => {
-    const b = el("button", "copy", label || "コピー");
-    b.type = "button";
-    b.addEventListener("click", () => copy(text, b, preOf && preOf()));
-    return b;
-  };
+  // コピーのボタン（{a|b} があれば「🎲」と「||」の2つ、なければ1つ）。押すたびに変換し直す（=抽選し直す）
+  function copyBtns(src, pv, prefix) {
+    const wrap = el("span", "btns");
+    const mk = (label, fn, title) => {
+      const b = el("button", "copy", label);
+      b.type = "button";
+      b.title = title;
+      b.addEventListener("click", () => copy(fn(src), b, pv));
+      wrap.appendChild(b);
+    };
+    if (hasDyn(src)) {
+      mk((prefix || "") + "🎲", forRoll, "{a|b} をここで抽選してコピー（押すたびに抽選し直す）");
+      mk((prefix || "") + "||", forNative, "{a|b} をNovelAIの ||a|b|| に変えてコピー（生成のたびにNovelAIが抽選する）");
+    } else mk(prefix ? prefix.trim() : "コピー", forRoll, "コピー（(語:1.2) などはNovelAIの書き方に変える）");
+    return wrap;
+  }
 
   // ---- 描画 ----
   const label = (k) => (data.labels && data.labels[k]) || k;
@@ -282,24 +587,27 @@
   function memoCard(title, text, short) {
     const card = el("div", "card");
     const secs = sections(text);
+    const pv = { box: el("div", "pv"), pre: el("pre", "pvtext") };
+    pv.box.hidden = true;
+    pv.box.appendChild(el("div", "pvhead", "コピーした内容"));
+    pv.box.appendChild(pv.pre);
     const h = el("h2");
     h.appendChild(el("span", "", title));
-    const firstPre = () => card.querySelector("pre");
-    if (secs.length > 1) h.appendChild(copyBtn(text, "全体", firstPre));
-    else h.appendChild(copyBtn(secs[0] ? secs[0].text : text, null, firstPre));
+    if (secs.length > 1) h.appendChild(copyBtns(text, pv, "全体 "));
+    else h.appendChild(copyBtns(secs[0] ? secs[0].text : text, pv));
     card.appendChild(h);
     for (const s of secs) {
       const box = el("div", "sec");
-      const pre = el("pre", short ? "short" : "", s.text);
       if (secs.length > 1) {
         const sh = el("div", "sechead");
         sh.appendChild(el("span", "", `【${s.name}】`));
-        sh.appendChild(copyBtn(s.text, null, () => pre));
+        sh.appendChild(copyBtns(s.text, pv));
         box.appendChild(sh);
       }
-      box.appendChild(pre);
+      box.appendChild(el("pre", short ? "short" : "", s.text));
       card.appendChild(box);
     }
+    card.appendChild(pv.box);
     return card;
   }
   function render() {
