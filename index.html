@@ -18,6 +18,7 @@
   ・通信先は api.github.com だけ（上の Content-Security-Policy で、それ以外への通信をブラウザが止める）
   ・読んだプロンプトは画面に表示するだけで、端末には保存しない（保存するのは、ユーザー名・リポジトリ名・読み取り用のキーだけ）
   ・PC専用の書き方（{a|b}・(語:1.2)・範囲の重み）は、コピーするときにNovelAIの書き方に変える（v1.2.0）
+  ・「✏ 入力」タブ: その場で書いた・貼ったプロンプトを抽選してコピーできる。書いた内容はこの端末にだけ保存（v1.3.0）
 -->
 <style>
   :root { color-scheme: dark; }
@@ -57,6 +58,9 @@
   .row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
   .note { color: #8f91ab; font-size: 12px; margin-top: 18px; }
   .more { width: 100%; margin-top: 4px; }
+  textarea.free { width: 100%; min-height: 34vh; resize: vertical; background: #12131d; color: inherit; border: 1px solid #3a3c52; border-radius: 8px; padding: 9px; font: 16px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+  .freebar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .freebar .copy { flex: 1; }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -71,6 +75,17 @@
     <div class="tabs">
       <button id="tabMemo" class="on">メモ</button>
       <button id="tabBk">バックアップ</button>
+      <button id="tabFree">✏ 入力</button>
+    </div>
+    <div id="freeBox" class="card" hidden>
+      <textarea id="freeText" class="free" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="例: 1girl, {red|green|3::blue} eyes, {{red|black} bikini|uniform}"></textarea>
+      <div class="freebar">
+        <button type="button" class="copy primary" id="freeRoll" title="ここで抽選してコピー（押すたびに抽選し直す）">🎲 抽選してコピー</button>
+        <button type="button" class="copy" id="freeNative" title="NovelAIの ||a|b|| に変えてコピー（生成のたびにNovelAIが抽選する）">|| に変えてコピー</button>
+        <button type="button" class="copy" id="freeClear">消す</button>
+      </div>
+      <div class="info">書いた内容はこの端末にだけ保存されます（送信しません）。</div>
+      <div class="pv" id="freePv" hidden><div class="pvhead">コピーした内容</div><pre class="pvtext" id="freePvText"></pre></div>
     </div>
     <select id="model" aria-label="モデル"></select>
     <div class="info" id="info"></div>
@@ -611,9 +626,18 @@
     return card;
   }
   function render() {
-    if (!data) return;
     $("tabMemo").classList.toggle("on", tab === "memo");
     $("tabBk").classList.toggle("on", tab === "bk");
+    $("tabFree").classList.toggle("on", tab === "free");
+    const free = tab === "free";
+    $("freeBox").hidden = !free;
+    $("info").hidden = free;
+    $("list").hidden = free;
+    if (free) {
+      $("model").hidden = true;
+      return;
+    }
+    if (!data) return;
     fillModels();
     const k = $("model").value;
     const sent = new Date(data.sentAt);
@@ -653,6 +677,41 @@
     bkShown = 15;
     render();
   });
+  // ---- ✏ 入力（v1.3.0）----
+  const FREE = "nmv_free";
+  try {
+    $("freeText").value = localStorage.getItem(FREE) || "";
+  } catch (e) {}
+  let freeTimer = 0;
+  $("freeText").addEventListener("input", () => {
+    clearTimeout(freeTimer);
+    freeTimer = setTimeout(() => {
+      try {
+        localStorage.setItem(FREE, $("freeText").value);
+      } catch (e) {}
+    }, 400);
+  });
+  addEventListener("pagehide", () => {
+    try {
+      localStorage.setItem(FREE, $("freeText").value);
+    } catch (e) {}
+  });
+  const freePv = { box: $("freePv"), pre: $("freePvText") };
+  $("freeRoll").addEventListener("click", (e) => copy(forRoll($("freeText").value), e.currentTarget, freePv));
+  $("freeNative").addEventListener("click", (e) => copy(forNative($("freeText").value), e.currentTarget, freePv));
+  $("freeClear").addEventListener("click", () => {
+    if (!$("freeText").value || !confirm("入力した内容を消す？")) return;
+    $("freeText").value = "";
+    freePv.box.hidden = true;
+    try {
+      localStorage.removeItem(FREE);
+    } catch (e) {}
+  });
+  $("tabFree").addEventListener("click", () => {
+    tab = "free";
+    render();
+  });
+
   $("model").addEventListener("change", () => {
     try {
       localStorage.setItem("nmv_model", $("model").value);
